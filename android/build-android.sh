@@ -204,6 +204,21 @@ build_dbus() {
 		"https://dbus.freedesktop.org/releases/dbus/dbus-$VER_DBUS.tar.gz"
 	extract dbus-$VER_DBUS.tar.gz
 	[ -d "$d" ] || d=$(find "$BUILD" -maxdepth 1 -type d -name "dbus*$VER_DBUS" | head -1)
+
+	# bionic 在 32 位 (armeabi-v7a) 上把 socklen_t 定义为有符号 int，
+	# dbus 的 add_groups_to_credentials() 里有一条「socklen_t 必须无符号」的
+	# 编译期断言会因此失败。该断言只校验类型，函数体本身只用正数长度，
+	# 内核按无符号解释，去掉断言对运行行为无影响。
+	python3 - "$d/dbus/dbus-sysdeps-unix.c" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path, encoding='utf-8').read()
+bad = "  _DBUS_STATIC_ASSERT (((socklen_t) -1) > 0);"
+if bad in src:
+    src = src.replace(bad, "  /* bionic 32-bit: socklen_t is signed int, assert removed */")
+    open(path, 'w', encoding='utf-8').write(src)
+    print("patched socklen_t assert")
+PYEOF
 	( cd "$d" && NOCONFIGURE=1 ./autogen.sh > "$WORK/log-dbus.txt" 2>&1 \
 		&& ./configure --host=$TRIPLE --prefix="$PREFIX" --disable-shared --enable-static \
 			--disable-systemd --disable-launchd --disable-tests --without-x \
@@ -370,6 +385,13 @@ build_bluez() {
 	sed -i 's/config_info_rsp, UINT_TO_PTR(index), NULL/config_info_rsp, UINT_TO_PTR(mgmt_index), NULL/' client/mgmt.c
 
 	[ -f configure ] || autoreconf -fi > "$WORK/log-autoreconf.txt" 2>&1
+
+	# 源码树里可能残留上一次用别的 ABI 编出来的 .o/.lo，libtool 不感知编译器变化，
+	# 会直接把它们链进来 —— 表现为 "incompatible with armelf_linux_eabi"。
+	# 所以每次动手前先 distclean（首次构建没有 Makefile，忽略即可）。
+	if [ -f Makefile ]; then
+		make distclean > /dev/null 2>&1 || true
+	fi
 
 	export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
 	ac_cv_lib_rt_clock_gettime=yes \
