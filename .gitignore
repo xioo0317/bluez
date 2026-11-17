@@ -186,3 +186,7 @@ cscope.out
 cscope.po.out
 
 **/__pycache__
+
+# Android 交叉编译产物
+/dist/
+/.android-build/
